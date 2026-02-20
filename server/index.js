@@ -88,6 +88,15 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", app: "LingoComm API", ts: new Date().toISOString() });
 });
 
+// Health check for Render deployment
+app.get("/healthz", (req, res) => {
+  res.status(200).json({ 
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`LingoComm API running at http://localhost:${PORT}`);

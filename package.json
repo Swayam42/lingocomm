@@ -5,7 +5,7 @@
   "type": "module",
   "main": "bot/index.js",
   "scripts": {
-    "start": "node bot/index.js",
+    "start": "node start.js",
     "dev": "node --watch bot/index.js",
     "server": "node server/index.js",
     "dev:server": "node --watch server/index.js"
