@@ -324,40 +324,13 @@ export async function handleDebug(ctx) {
 
       try {
         await ctx.telegram.sendMessage(userId, debugMsg, { parse_mode: "HTML" });
-        const sentMsg = await ctx.reply("Debug info sent to your DM.");
-        
-        // Auto-delete after 3 seconds
-        setTimeout(async () => {
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, sentMsg.message_id);
-          } catch (err) {
-            console.error("[Debug] Failed to delete message:", err.message);
-          }
-        }, 3000);
+        await ctx.reply("✅ Debug info sent to your DM.");
       } catch (err) {
-        const errorMsg = await ctx.reply("Cannot send DM. Please start a private chat with me first: @" + ctx.botInfo.username);
-        
-        // Auto-delete after 3 seconds
-        setTimeout(async () => {
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, errorMsg.message_id);
-          } catch (err) {
-            console.error("[Debug] Failed to delete message:", err.message);
-          }
-        }, 3000);
+        await ctx.reply("❌ Cannot send DM. Please start a private chat with me first: @" + ctx.botInfo.username);
       }
     } catch (err) {
       console.error("[Lingo.dev] Failed to check admin status:", err.message);
-      const errorMsg = await ctx.reply("Error checking permissions.");
-      
-      // Auto-delete after 3 seconds
-      setTimeout(async () => {
-        try {
-          await ctx.telegram.deleteMessage(ctx.chat.id, errorMsg.message_id);
-        } catch (err) {
-          console.error("[Debug] Failed to delete message:", err.message);
-        }
-      }, 3000);
+      await ctx.reply("❌ Error checking permissions.");
     }
   } else {
     // Private chat - not allowed for debug

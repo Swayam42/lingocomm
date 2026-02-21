@@ -29,7 +29,49 @@ export async function handleNewMember(ctx) {
           });
           console.log(`[Lingo.dev] Registered new group ${groupId}`);
         }
-        const welcomeMsg = await ctx.reply(
+        
+        // Register all existing members in the group
+        try {
+          const chatMembersCount = await ctx.telegram.getChatMembersCount(ctx.chat.id);
+          console.log(`[Lingo.dev] Group has ${chatMembersCount} members. Attempting to register existing members...`);
+          
+          // Get chat administrators (which includes owner)
+          const chatAdmins = await ctx.telegram.getChatAdministrators(ctx.chat.id);
+          for (const admin of chatAdmins) {
+            if (admin.user.is_bot) continue; // Skip bots
+            
+            const adminId = admin.user.id;
+            let existingUser = await User.findOne({ telegramId: adminId });
+            
+            if (!existingUser) {
+              // Create new user entry
+              await User.create({
+                telegramId: adminId,
+                username: admin.user.username || "",
+                firstName: admin.user.first_name || "",
+                locale: admin.user.language_code?.split("-")?.[0] || "en",
+                manuallySet: false,
+                groups: [groupId],
+              });
+              console.log(`[Lingo.dev] Registered existing admin ${admin.user.username || adminId} in group ${groupId}`);
+            } else {
+              // Update existing user to include this group
+              await User.findOneAndUpdate(
+                { telegramId: adminId },
+                { 
+                  $addToSet: { groups: groupId },
+                  username: admin.user.username || existingUser.username,
+                  firstName: admin.user.first_name || existingUser.firstName,
+                }
+              );
+              console.log(`[Lingo.dev] Added group ${groupId} to existing admin ${admin.user.username || adminId}`);
+            }
+          }
+        } catch (err) {
+          console.log(`[Lingo.dev] Could not register existing members: ${err.message}`);
+        }
+        
+        await ctx.reply(
           `<b>LingoComm Bot Activated</b>\n\n` +
           `I'll automatically translate messages into everyone's preferred language.\n\n` +
           `<b>For existing members:</b>\n` +
@@ -45,16 +87,6 @@ export async function handleNewMember(ctx) {
           `<i>Just start chatting - I'll handle the rest.</i>`,
           { parse_mode: "HTML" }
         );
-        
-        // Auto-delete welcome message after 15 seconds
-        setTimeout(async () => {
-          try {
-            await ctx.telegram.deleteMessage(ctx.chat.id, welcomeMsg.message_id);
-            console.log(`[Lingo.dev] Auto-deleted welcome message in group ${groupId}`);
-          } catch (err) {
-            console.log(`[Lingo.dev] Could not delete welcome message: ${err.message}`);
-          }
-        }, 15000);
       }
       continue;
     }
@@ -131,20 +163,10 @@ export async function handleNewMember(ctx) {
     }
 
     const flag = flagOf(welcomeLocale);
-    const userWelcomeMsg = await ctx.reply(
+    await ctx.reply(
       `${flag}\n\n${localizedWelcome}`,
       { parse_mode: "HTML" }
     );
-    
-    // Auto-delete after 20 seconds
-    setTimeout(async () => {
-      try {
-        await ctx.telegram.deleteMessage(ctx.chat.id, userWelcomeMsg.message_id);
-        console.log(`[Lingo.dev] Auto-deleted welcome for ${username}`);
-      } catch (err) {
-        console.log(`[Lingo.dev] Could not delete welcome: ${err.message}`);
-      }
-    }, 20000);
     try {
       const safeGroupTitle = escapeHtml(ctx.chat.title || "a group");
       await ctx.telegram.sendMessage(
