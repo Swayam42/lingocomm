@@ -1,5 +1,10 @@
 import { User } from "../models/User.js";
+import { groupStats } from "../models/groupStats.js";
 import { translateOne, nameOf, flagOf } from "../translator.js";
+
+// Track recent joins to prevent spam
+const recentJoins = new Map();
+const JOIN_SPAM_THRESHOLD = 60000; // 1 minute
 
 export async function handleNewMember(ctx) {
   const newMembers = ctx.message.new_chat_members;
@@ -11,9 +16,20 @@ export async function handleNewMember(ctx) {
     if (member.is_bot) {
       if (member.id === ctx.botInfo.id) {
         console.log(`[Lingo.dev] Added to group: ${ctx.chat.title || groupId}`);
-        
-        // Send welcome message to existing members in the group
-        await ctx.reply(
+        const existingGroup = await groupStats.findOne({ groupId });
+        if (existingGroup) {
+          console.log(`[Lingo.dev] Bot re-added to existing group ${groupId} - preserving settings`);
+        } else {
+          // Register new group
+          await groupStats.create({
+            groupId,
+            groupName: ctx.chat.title || "Unknown Group",
+            memberCount: 0,
+            totalTranslations: 0,
+          });
+          console.log(`[Lingo.dev] Registered new group ${groupId}`);
+        }
+        const welcomeMsg = await ctx.reply(
           `<b>LingoComm Bot Activated</b>\n\n` +
           `I'll automatically translate messages into everyone's preferred language.\n\n` +
           `<b>For existing members:</b>\n` +
@@ -29,6 +45,16 @@ export async function handleNewMember(ctx) {
           `<i>Just start chatting - I'll handle the rest.</i>`,
           { parse_mode: "HTML" }
         );
+        
+        // Auto-delete welcome message after 15 seconds
+        setTimeout(async () => {
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat.id, welcomeMsg.message_id);
+            console.log(`[Lingo.dev] Auto-deleted welcome message in group ${groupId}`);
+          } catch (err) {
+            console.log(`[Lingo.dev] Could not delete welcome message: ${err.message}`);
+          }
+        }, 15000);
       }
       continue;
     }
@@ -38,6 +64,23 @@ export async function handleNewMember(ctx) {
     const username = member.username || firstName;
 
     console.log(`[Lingo.dev] User ${username} joined group ${groupId}`);
+    const joinKey = `${userId}_${groupId}`;
+    const lastJoin = recentJoins.get(joinKey);
+    const now = Date.now();
+    
+    if (lastJoin && (now - lastJoin) < JOIN_SPAM_THRESHOLD) {
+      console.log(`[Lingo.dev] Skipping welcome for ${username} - recently joined`);
+      return;
+    }
+    recentJoins.set(joinKey, now);
+    
+    // Clean up old entries
+    if (recentJoins.size > 1000) {
+      const cutoff = now - JOIN_SPAM_THRESHOLD;
+      for (const [key, time] of recentJoins.entries()) {
+        if (time < cutoff) recentJoins.delete(key);
+      }
+    }
 
     let user = await User.findOne({ telegramId: userId });
     const hasPreference = user && user.manuallySet;
@@ -88,12 +131,20 @@ export async function handleNewMember(ctx) {
     }
 
     const flag = flagOf(welcomeLocale);
-
-    await ctx.reply(
+    const userWelcomeMsg = await ctx.reply(
       `${flag}\n\n${localizedWelcome}`,
       { parse_mode: "HTML" }
     );
-
+    
+    // Auto-delete after 20 seconds
+    setTimeout(async () => {
+      try {
+        await ctx.telegram.deleteMessage(ctx.chat.id, userWelcomeMsg.message_id);
+        console.log(`[Lingo.dev] Auto-deleted welcome for ${username}`);
+      } catch (err) {
+        console.log(`[Lingo.dev] Could not delete welcome: ${err.message}`);
+      }
+    }, 20000);
     try {
       const safeGroupTitle = escapeHtml(ctx.chat.title || "a group");
       await ctx.telegram.sendMessage(
@@ -111,8 +162,9 @@ export async function handleNewMember(ctx) {
         `<i>Start chatting in the group - the bot will handle the rest.</i>`,
         { parse_mode: "HTML" }
       );
+      console.log(`[Lingo.dev] Sent DM to ${username}`);
     } catch (err) {
-      console.log(`[Lingo.dev] Can't DM ${username} (needs to /start bot)`);
+      console.log(`[Lingo.dev] Cannot DM ${username} - user may have blocked bot or not started chat (${err.message})`);
     }
   }
 }

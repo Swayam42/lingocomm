@@ -34,36 +34,43 @@ export const flagOf = (l) => LANG_FLAGS[l?.toLowerCase()] || "🌐";
 export const nameOf = (l) => LANG_NAMES[l?.toLowerCase()] || (l || "Unknown").toUpperCase();
 
 /**
- * Detect the language of a message.
- * Returns ISO locale code. Falls back to "en" on failure.
+
+ * @param {string} 
+ * @param {string} 
  */
-export async function detectLanguage(text) {
+export async function detectLanguage(text, fallbackHint = "en") {
   try {
-    if (!text || text.trim().length < 3) return "en";
+    if (!text || text.trim().length < 3) return fallbackHint;
     
     console.log(`[Lingo.dev] Detecting language for: "${text.substring(0, 30)}..."`);
-    
+
     const timeoutPromise = new Promise((_, reject) => 
       setTimeout(() => reject(new Error('Language detection timeout')), 5000)
     );
     
-    const detectionPromise = lingo.recognizeLocale(text);
+    const detectionPromise = lingo.localizeText(text, {
+      sourceLocale: null, // Auto-detect
+      targetLocale: "en",
+      fast: true, // Prioritize speed for detection
+    });
     
-    const locale = await Promise.race([detectionPromise, timeoutPromise]);
-    console.log(`[Lingo.dev] Detected language: ${locale || "en"}`);
-    return locale || "en";
+    const result = await Promise.race([detectionPromise, timeoutPromise]);
+    const localePromise = lingo.recognizeLocale(text);
+    const locale = await Promise.race([localePromise, timeoutPromise]);
+    
+    console.log(`[Lingo.dev] ✓ Detected language: ${locale || fallbackHint}`);
+    return locale || fallbackHint;
   } catch (err) {
-    console.error(`[Lingo.dev] Language detection failed:`, err.message);
-    return "en";
+    console.log(`[Lingo.dev] Detection timeout - using fallback: ${fallbackHint}`);
+    return fallbackHint;
   }
 }
 
 /**
  * THE CORE: Translate one message into MULTIPLE languages simultaneously.
- * This is what makes LingoComm powerful — one API call, N translations.
  *
  * @param {string} text          - Original message
- * @param {string} sourceLocale  - Detected source language
+ * @param {string} sourceLocale  - Detected source language (or null for auto-detect)
  * @param {string[]} targetLocales - Array of target locales e.g. ["ja","hi","es","fr"]
  * @returns {Promise<Object>}    - { "ja": "...", "hi": "...", "es": "..." }
  */
@@ -71,20 +78,24 @@ export async function translateToMany(text, sourceLocale, targetLocales) {
   if (!targetLocales || targetLocales.length === 0) return {};
 
   // Remove source locale from targets (no need to translate to same language)
-  const filtered = targetLocales.filter((l) => l !== sourceLocale);
+  const filtered = sourceLocale 
+    ? targetLocales.filter((l) => l !== sourceLocale)
+    : targetLocales;
+    
   if (filtered.length === 0) return {};
 
   try {
-    console.log(`[Lingo.dev] Translating "${text.substring(0, 30)}..." from ${sourceLocale} to [${filtered.join(", ")}]`);
+    const sourceInfo = sourceLocale || "auto-detect";
+    console.log(`[Lingo.dev] Translating "${text.substring(0, 30)}..." from ${sourceInfo} to [${filtered.join(", ")}]`);
     
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Translation timeout after 15s')), 15000)
+      setTimeout(() => reject(new Error('Translation timeout after 8s')), 8000)
     );
     
-    // batchLocalizeText returns an ARRAY of strings in the same order as targetLocales
     const translationPromise = lingo.batchLocalizeText(text, {
-      sourceLocale,
+      sourceLocale: sourceLocale || null,
       targetLocales: filtered,
+      fast: true,
     });
     
     const translationsArray = await Promise.race([translationPromise, timeoutPromise]);
@@ -107,17 +118,18 @@ export async function translateToMany(text, sourceLocale, targetLocales) {
     for (const targetLocale of filtered) {
       try {
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Translation timeout')), 10000)
+          setTimeout(() => reject(new Error('Translation timeout')), 5000)
         );
         
         const translationPromise = lingo.localizeText(text, {
-          sourceLocale,
+          sourceLocale: sourceLocale || null, // null = auto-detect
           targetLocale,
+          fast: true,
         });
         
         const translated = await Promise.race([translationPromise, timeoutPromise]);
         results[targetLocale] = translated;
-        console.log(`[Lingo.dev] ${targetLocale}: Done`);
+        console.log(`[Lingo.dev] ${targetLocale}: ✓`);
       } catch (fallbackErr) {
         console.error(`[Lingo.dev] Failed ${targetLocale}:`, fallbackErr.message);
         results[targetLocale] = text;

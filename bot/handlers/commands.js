@@ -159,9 +159,18 @@ export async function handleSummary(ctx) {
     );
   }
 
-  // Check if user is admin in group
   if (!(await isGroupAdmin(ctx))) {
-    return ctx.reply("Only group admins can use this command.");
+    const deniedMsg = await ctx.reply("Only group admins can use this command.");
+    
+    // Auto-delete denial message after 3 seconds
+    setTimeout(async () => {
+      try {
+        await ctx.telegram.deleteMessage(ctx.chat.id, deniedMsg.message_id);
+      } catch (err) {
+        console.log(`[Summary] Could not delete denial message: ${err.message}`);
+      }
+    }, 3000);
+    return;
   }
 
   const user = await User.findOne({ telegramId: userId });
@@ -272,14 +281,24 @@ export async function handleDebug(ctx) {
   const userId = ctx.from.id;
   const isGroup = ctx.chat.type !== "private";
 
-  // If in group, check if user is admin/owner
+  // If in group, check if user is admin/owner 
   if (isGroup) {
     try {
       const member = await ctx.telegram.getChatMember(ctx.chat.id, userId);
       const isAdmin = ["creator", "administrator"].includes(member.status);
       
       if (!isAdmin) {
-        return ctx.reply("This command is restricted to group administrators.");
+        const deniedMsg = await ctx.reply("This command is restricted to group administrators.");
+        
+        // Auto-delete denial message after 3 seconds
+        setTimeout(async () => {
+          try {
+            await ctx.telegram.deleteMessage(ctx.chat.id, deniedMsg.message_id);
+          } catch (err) {
+            console.log(`[Debug] Could not delete denial message: ${err.message}`);
+          }
+        }, 3000);
+        return;
       }
 
       // Admin confirmed - send debug info via DM

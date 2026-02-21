@@ -4,16 +4,47 @@ import { messageLog } from "../models/messageLog.js";
 import { groupStats } from "../models/groupStats.js";
 
 const MIN_LENGTH = 3;
+const TELEGRAM_MAX_LENGTH = 4096; // Telegram message limit
 const cooldowns = new Map();
-const COOLDOWN_MS = 1500;
+const COOLDOWN_MS = 500; // Reduced for faster response
+const messageBurst = new Map();
+const BURST_THRESHOLD = 10; // Max messages per window
+const BURST_WINDOW = 5000; // 5 second window
 
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
+const EMOJI_REGEX = /^[\p{Emoji}\s]+$/u; 
+const CODE_BLOCK_REGEX = /(```[\s\S]*?```|`[^`]+`)/g;
 
 
 function isUrlOnly(text) {
   const withoutUrls = text.replace(URL_REGEX, '').trim();
   return withoutUrls.length === 0;
+}
+function isEmojiOnly(text) {
+  return EMOJI_REGEX.test(text.trim());
+}
+
+function extractCodeBlocks(text) {
+  const codeBlocks = [];
+  const textWithPlaceholders = text.replace(CODE_BLOCK_REGEX, (block) => {
+    codeBlocks.push(block);
+    return `__CODE_${codeBlocks.length - 1}__`;
+  });
+  return { textWithPlaceholders, codeBlocks };
+}
+
+function restoreCodeBlocks(translatedText, codeBlocks) {
+  let result = translatedText;
+  codeBlocks.forEach((block, index) => {
+    result = result.replace(`__CODE_${index}__`, block);
+  });
+  return result;
+}
+
+function truncateToLimit(text, limit = TELEGRAM_MAX_LENGTH) {
+  if (text.length <= limit) return text;
+  return text.substring(0, limit - 50) + "\n\n<i>... (truncated)</i>";
 }
 
 
@@ -35,15 +66,15 @@ function restoreUrls(translatedText, urls) {
   return result;
 }
 
-// Helper function to retry Telegram API calls
+// Helper function to retry Telegram API calls with fast retries
 async function sendWithRetry(ctx, text, options, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       return await ctx.reply(text, options);
     } catch (err) {
-      if (err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET') {
+      if (err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET' || err.code === 'ECONNABORTED') {
         if (i < retries - 1) {
-          const delay = Math.min(1000 * Math.pow(2, i), 5000); // Exponential backoff, max 5s
+          const delay = Math.min(300 * Math.pow(2, i), 2000); // Fast retry: 300ms, 600ms, 1200ms max
           console.log(`[Lingo.dev] Telegram API timeout, retrying in ${delay}ms... (${i + 1}/${retries})`);
           await new Promise(resolve => setTimeout(resolve, delay));
         } else {
@@ -68,20 +99,52 @@ export async function handleMessage(ctx) {
     console.log(`[Lingo.dev] Skipping URL-only message`);
     return;
   }
+  
+  if (isEmojiOnly(msg.text)) {
+    console.log(`[Lingo.dev] Skipping emoji-only message`);
+    return;
+  }
 
   const senderId = msg.from.id;
   const now = Date.now();
   const lastMsg = cooldowns.get(senderId) || 0;
   if (now - lastMsg < COOLDOWN_MS) return;
   cooldowns.set(senderId, now);
+  
+  const burstKey = `${senderId}_${msg.chat.id}`;
+  let burstData = messageBurst.get(burstKey) || { count: 0, windowStart: now };
+  
+  if (now - burstData.windowStart > BURST_WINDOW) {
+    // Reset window
+    burstData = { count: 1, windowStart: now };
+  } else {
+    burstData.count++;
+    if (burstData.count > BURST_THRESHOLD) {
+      console.log(`[Lingo.dev] Rate limiting ${msg.from.username || senderId} - burst detected`);
+      return;
+    }
+  }
+  messageBurst.set(burstKey, burstData);
+  
+  // Clean up old burst data periodically
+  if (messageBurst.size > 1000) {
+    for (const [key, data] of messageBurst.entries()) {
+      if (now - data.windowStart > BURST_WINDOW * 2) {
+        messageBurst.delete(key);
+      }
+    }
+  }
 
   const groupId = msg.chat.id.toString();
   const groupName = msg.chat.title || "Unknown Group";
   const text = msg.text;
   const senderUsername = msg.from.first_name || msg.from.username || "User";
 
+  const { textWithPlaceholders: textWithoutCode, codeBlocks } = extractCodeBlocks(text);
+  const hasCodeBlocks = codeBlocks.length > 0;
+  
   // Extract URLs to preserve them during translation
-  const { textWithPlaceholders, urls } = extractUrls(text);
+  const { textWithPlaceholders, urls } = extractUrls(hasCodeBlocks ? textWithoutCode : text);
   const hasUrls = urls.length > 0;
 
   try {
@@ -90,7 +153,9 @@ export async function handleMessage(ctx) {
     const isNewUser = !sender;
     
     if (!sender) {
-      const detectedLocale = await detectLanguage(text);
+      // Use Telegram language code as hint if available
+      const telegramLangHint = msg.from.language_code?.split('-')[0] || "en";
+      const detectedLocale = await detectLanguage(text, telegramLangHint);
       sender = await User.create({
         telegramId: senderId,
         username: msg.from.username || "",
@@ -135,7 +200,8 @@ export async function handleMessage(ctx) {
       
       // ONLY auto-detect language if user hasn't manually set it
       if (!sender.manuallySet) {
-        const detectedLocale = await detectLanguage(text);
+        // Use current locale as hint
+        const detectedLocale = await detectLanguage(text, sender.locale);
         if (detectedLocale !== sender.locale) {
           sender.locale = detectedLocale;
           console.log(`[Lingo.dev] Auto-updated ${senderUsername} language: ${detectedLocale} (not manually set)`);
@@ -149,10 +215,20 @@ export async function handleMessage(ctx) {
     }
 
     // === INTELLIGENT TRANSLATION LOGIC ===
-    // 1. Detect actual message language (may differ from sender's preferred language)
-    const textToDetect = hasUrls ? textWithPlaceholders : text;
-    const detectedSourceLang = await detectLanguage(textToDetect);
-    console.log(`[Lingo.dev] Message language: ${detectedSourceLang} | Sender preference: ${sender.locale}${hasUrls ? ' | URLs preserved' : ''}`);
+    // Always auto-detect the actual message language (user can send in any language)
+    const textToDetect = hasCodeBlocks ? textWithPlaceholders : (hasUrls ? textWithPlaceholders : text);
+    
+    let detectedSourceLang;
+    if (sender.manuallySet && text.trim().length < 50) {
+      // For short messages from users with manual language settings, use their preference as initial hint
+      // but still allow them to send messages in other languages
+      detectedSourceLang = await detectLanguage(textToDetect, sender.locale);
+    } else {
+      // For longer messages or auto-detected users, perform detection with fallback
+      detectedSourceLang = await detectLanguage(textToDetect, sender.locale);
+    }
+    
+    console.log(`[Lingo.dev] Message language: ${detectedSourceLang} | Sender preference: ${sender.locale}${hasUrls ? ' | URLs preserved' : ''}${hasCodeBlocks ? ' | Code preserved' : ''}`);
 
     // 2. Fetch all unique preferred languages of users in this group
     const allGroupUsers = await User.find({ groups: groupId });
@@ -160,9 +236,10 @@ export async function handleMessage(ctx) {
     
     console.log(`[Lingo.dev] Group has ${allLocales.size} unique languages: [${[...allLocales].join(", ")}]`);
 
-    // 3. Remove detected source language and sender's preferred language
+    // 3. Remove only the detected source language (translate to ALL other languages including sender's preference)
+    // This allows users to send messages in languages other than their preferred language
     const targetLocales = [...allLocales].filter(
-      locale => locale !== detectedSourceLang && locale !== sender.locale
+      locale => locale !== detectedSourceLang
     );
 
     // 4. If no target languages remain, do nothing
@@ -173,10 +250,10 @@ export async function handleMessage(ctx) {
 
     // 5. Use batchLocalizeText() for efficiency
     console.log(`[Lingo.dev] Translating from ${detectedSourceLang} to [${targetLocales.join(", ")}]`);
-    const textToTranslate = hasUrls ? textWithPlaceholders : text;
+    const textToTranslate = hasCodeBlocks ? textWithPlaceholders : (hasUrls ? textWithPlaceholders : text);
     const translations = await translateToMany(textToTranslate, detectedSourceLang, targetLocales);
 
-    // 6. Send a single grouped message containing all translations
+    // 6. Send a minimal, professional translation message (no username, just translations)
     const translationLines = [];
     for (const locale of targetLocales) {
       let translated = translations[locale];
@@ -186,32 +263,47 @@ export async function handleMessage(ctx) {
         translated = restoreUrls(translated, urls);
       }
       
-      if (translated && translated !== text) {
+      if (hasCodeBlocks && translated) {
+        translated = restoreCodeBlocks(translated, codeBlocks);
+      }
+      
+      // Post translation if it exists and has content
+      if (translated && translated.trim().length > 0) {
         const flag = flagOf(locale);
         const langName = nameOf(locale);
-        translationLines.push(`${flag} <b>${langName}:</b> ${escapeHtml(translated)}`);
+        // Minimal professional format: 🇮🇳 Hindi: translation
+        translationLines.push(`${flag} ${langName}: ${escapeHtml(translated)}`);
+        console.log(`[Lingo.dev] Added ${locale} translation: ${translated.substring(0, 50)}...`);
+      } else {
+        console.log(`[Lingo.dev] Skipping ${locale} - empty or invalid translation`);
       }
     }
 
     if (translationLines.length > 0) {
-      const replyText = `${header}\n\n${translationLines.join('\n\n')}`;
+      // Clean, minimal format - just the translations
+      let replyText = translationLines.join('\n\n');
+      replyText = truncateToLimit(replyText);
+      
+      console.log(`[Lingo.dev] Posting ${translationLines.length} translation(s) to group...`);
       
       try {
         await sendWithRetry(ctx, replyText, {
           parse_mode: "HTML",
           reply_to_message_id: msg.message_id,
         });
-        console.log(`[Lingo.dev] Posted ${translationLines.length} translations to group`);
+        console.log(`[Lingo.dev] ✓ Successfully posted ${translationLines.length} translation(s)`);
       } catch (err) {
         console.error(`[Lingo.dev] Failed to post translation after retries: ${err.message}`);
         // Try without reply_to_message_id as fallback
         try {
           await sendWithRetry(ctx, replyText, { parse_mode: "HTML" });
-          console.log(`[Lingo.dev] Posted translation without thread (fallback)`);
+          console.log(`[Lingo.dev] ✓ Posted translation without thread (fallback)`);
         } catch (fallbackErr) {
-          console.error(`[Lingo.dev] Complete failure to post translation: ${fallbackErr.message}`);
+          console.error(`[Lingo.dev] ✗ Complete failure to post translation: ${fallbackErr.message}`);
         }
       }
+    } else {
+      console.log(`[Lingo.dev] No translations to post - all were empty or filtered`);
     }
 
     // Log for analytics
@@ -304,12 +396,20 @@ async function translateCaption(ctx, captionText) {
   if (now - lastMsg < COOLDOWN_MS) return;
   cooldowns.set(senderId, now);
   
+  if (isEmojiOnly(captionText)) {
+    console.log(`[Lingo.dev] Skipping emoji-only caption`);
+    return;
+  }
+  
   const groupId = msg.chat.id.toString();
   const groupName = msg.chat.title || "Unknown Group";
   const senderUsername = msg.from.first_name || msg.from.username || "User";
   
+  const { textWithPlaceholders: textWithoutCode, codeBlocks } = extractCodeBlocks(captionText);
+  const hasCodeBlocks = codeBlocks.length > 0;
+  
   // Extract URLs to preserve them
-  const { textWithPlaceholders, urls } = extractUrls(captionText);
+  const { textWithPlaceholders, urls } = extractUrls(hasCodeBlocks ? textWithoutCode : captionText);
   const hasUrls = urls.length > 0;
   
   try {
@@ -317,7 +417,8 @@ async function translateCaption(ctx, captionText) {
     let sender = await User.findOne({ telegramId: senderId });
     if (!sender) {
       const textToDetect = hasUrls ? textWithPlaceholders : captionText;
-      const detectedLocale = await detectLanguage(textToDetect);
+      const telegramLangHint = msg.from.language_code?.split('-')[0] || "en";
+      const detectedLocale = await detectLanguage(textToDetect, telegramLangHint);
       sender = await User.create({
         telegramId: senderId,
         username: msg.from.username || "",
@@ -334,7 +435,7 @@ async function translateCaption(ctx, captionText) {
       
       if (!sender.manuallySet) {
         const textToDetect = hasUrls ? textWithPlaceholders : captionText;
-        const detectedLocale = await detectLanguage(textToDetect);
+        const detectedLocale = await detectLanguage(textToDetect, sender.locale);
         if (detectedLocale !== sender.locale) {
           sender.locale = detectedLocale;
           console.log(`[Lingo.dev] Auto-updated ${senderUsername} language: ${detectedLocale}`);
@@ -345,17 +446,22 @@ async function translateCaption(ctx, captionText) {
       await sender.save();
     }
     
-    // Detect caption language
-    const textToDetect = hasUrls ? textWithPlaceholders : captionText;
-    const detectedSourceLang = await detectLanguage(textToDetect);
-    console.log(`[Lingo.dev] Caption language: ${detectedSourceLang}${hasUrls ? ' | URLs preserved' : ''}`);
+    // Detect caption language - always auto-detect
+    const textToDetect = hasCodeBlocks ? textWithPlaceholders : (hasUrls ? textWithPlaceholders : captionText);
+    
+    let detectedSourceLang;
+    // Always detect caption language properly
+    detectedSourceLang = await detectLanguage(textToDetect, sender.locale);
+    
+    console.log(`[Lingo.dev] Caption language: ${detectedSourceLang}${hasUrls ? ' | URLs preserved' : ''}${hasCodeBlocks ? ' | Code preserved' : ''}`);
     
     // Get target languages
     const allGroupUsers = await User.find({ groups: groupId });
     const allLocales = new Set(allGroupUsers.map(u => u.locale));
     
+    // Translate to all languages except the detected source
     const targetLocales = [...allLocales].filter(
-      locale => locale !== detectedSourceLang && locale !== sender.locale
+      locale => locale !== detectedSourceLang
     );
     
     if (targetLocales.length === 0) {
@@ -365,10 +471,10 @@ async function translateCaption(ctx, captionText) {
     
     // Translate caption
     console.log(`[Lingo.dev] Translating caption from ${detectedSourceLang} to [${targetLocales.join(", ")}]`);
-    const textToTranslate = hasUrls ? textWithPlaceholders : captionText;
+    const textToTranslate = hasCodeBlocks ? textWithPlaceholders : (hasUrls ? textWithPlaceholders : captionText);
     const translations = await translateToMany(textToTranslate, detectedSourceLang, targetLocales);
     
-    // Build translations
+    // Build minimal professional translations
     const translationLines = [];
     for (const locale of targetLocales) {
       let translated = translations[locale];
@@ -377,25 +483,38 @@ async function translateCaption(ctx, captionText) {
         translated = restoreUrls(translated, urls);
       }
       
-      if (translated && translated !== captionText) {
+      if (hasCodeBlocks && translated) {
+        translated = restoreCodeBlocks(translated, codeBlocks);
+      }
+      
+      // Post translation if it exists and has content
+      if (translated && translated.trim().length > 0) {
         const flag = flagOf(locale);
         const langName = nameOf(locale);
-        translationLines.push(`${flag} <b>${langName}:</b> ${escapeHtml(translated)}`);
+        // Minimal format: 🇮🇳 Hindi: translation
+        translationLines.push(`${flag} ${langName}: ${escapeHtml(translated)}`);
+        console.log(`[Lingo.dev] Added ${locale} caption translation`);
       }
     }
     
     if (translationLines.length > 0) {
-      const replyText = `${header}\n\n${translationLines.join('\n\n')}`;
+      // Clean minimal format
+      let replyText = translationLines.join('\n\n');
+      replyText = truncateToLimit(replyText);
+      
+      console.log(`[Lingo.dev] Posting ${translationLines.length} caption translation(s)...`);
       
       try {
         await sendWithRetry(ctx, replyText, {
           parse_mode: "HTML",
           reply_to_message_id: msg.message_id,
         });
-        console.log(`[Lingo.dev] Posted ${translationLines.length} caption translations`);
+        console.log(`[Lingo.dev] ✓ Successfully posted caption translation(s)`);
       } catch (err) {
         console.error(`[Lingo.dev] Failed to post caption translation: ${err.message}`);
       }
+    } else {
+      console.log(`[Lingo.dev] No caption translations to post`);
     }
     
     // Log for analytics
