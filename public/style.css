@@ -246,7 +246,7 @@ h1 .dim { color: var(--dim); }
 /* ── PHONE DEMO IMAGE ── */
 .phone-demo {
   width: 100%;
-  max-width: 400px;
+  max-width: 280px;
   height: auto;
   filter: drop-shadow(0 20px 60px rgba(0,0,0,0.6));
   transition: transform 0.3s ease;
