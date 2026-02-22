@@ -1,7 +1,7 @@
 import { User } from "../models/User.js";
 import { messageLog } from "../models/messageLog.js";
 import { groupStats } from "../models/groupStats.js";
-import { translateOne, summarizeChat, nameOf, flagOf, LANG_NAMES } from "../translator.js";
+import { translateOne, nameOf, flagOf, LANG_NAMES } from "../translator.js";
 
 
 //Check if user is admin in current chat
@@ -146,72 +146,6 @@ export async function handleLangs(ctx) {
   );
 }
 
-export async function handleSummary(ctx) {
-  const userId = ctx.from.id;
-  const groupId = ctx.chat.id;
-
-  if (ctx.chat.type === "private") {
-    return ctx.reply(
-      "<b>Summary Command</b>\n\n" +
-      "This command works in group chats only.\n\n" +
-      "<i>Add me to a group and type /summary to get recent chat history in your language.</i>",
-      { parse_mode: "HTML" }
-    );
-  }
-
-  if (!(await isGroupAdmin(ctx))) {
-    const deniedMsg = await ctx.reply("Only group admins can use this command.");
-    
-    // Auto-delete denial message after 3 seconds
-    setTimeout(async () => {
-      try {
-        await ctx.telegram.deleteMessage(ctx.chat.id, deniedMsg.message_id);
-      } catch (err) {
-        console.log(`[Summary] Could not delete denial message: ${err.message}`);
-      }
-    }, 3000);
-    return;
-  }
-
-  const user = await User.findOne({ telegramId: userId });
-  const userLocale = user?.locale || "en";
-
-  const logs = await messageLog.find({ groupId })
-    .sort({ sentAt: -1 })
-    .limit(50)
-    .lean();
-
-  if (logs.length === 0) {
-    return ctx.reply("No recent messages to summarize.");
-  }
-
-  const chatHistory = logs
-    .reverse()
-    .map((log) => ({ name: log.username, text: log.text }));
-
-  await ctx.reply("Generating summary in your language...");
-
-  try {
-    const translatedChat = await summarizeChat(chatHistory, userLocale);
-
-    const summaryLines = translatedChat
-      .slice(-15)
-      .map((m) => `<b>${escapeHtml(m.name)}:</b> ${escapeHtml(m.text)}`)
-      .join("\n");
-
-    const langName = nameOf(userLocale);
-    const flag = flagOf(userLocale);
-
-    await ctx.reply(
-      `${flag} <b>Last ${Math.min(15, translatedChat.length)} messages in ${langName}</b>\n\n` +
-      `${summaryLines}`,
-      { parse_mode: "HTML" }
-    );
-  } catch (err) {
-    await ctx.reply("❌ Could not generate summary. Try again in a moment.");
-  }
-}
-
 export async function handleStats(ctx) {
   const userId = ctx.from.id;
   const groupId = ctx.chat.id;
@@ -261,7 +195,6 @@ export async function handleHelp(ctx) {
     `/lang [code] - Set your language (DM only)\n` +
     `/langs - List all supported languages (DM only)\n` +
     `/stats - View your personal stats (groups only)\n` +
-    `/summary - Get recent chat in your language (groups only, admin)\n` +
     `/analyze - Analyze voice message (reply to voice)\n` +
     `/debug - Troubleshooting info (groups only, admin)\n` +
     `/help - Show this message\n\n` +

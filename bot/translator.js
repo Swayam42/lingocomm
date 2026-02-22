@@ -152,23 +152,3 @@ export async function translateOne(text, sourceLocale, targetLocale) {
     return text;
   }
 }
-
-/**
- * Translate a chat history for the /summary command.
- * localizeChat() preserves speaker names beautifully.
- *
- * @param {Array<{name: string, text: string}>} messages
- * @param {string} targetLocale - User's preferred language
- */
-export async function summarizeChat(messages, targetLocale) {
-  try {
-    const translated = await lingo.localizeChat(messages, {
-      sourceLocale: "en",
-      targetLocale,
-    });
-    return translated;
-  } catch (err) {
-    console.error("[Lingo.dev] localizeChat failed:", err.message);
-    return messages;
-  }
-}

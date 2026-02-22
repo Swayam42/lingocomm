@@ -9,7 +9,6 @@ import {
   handleStart,
   handleLang,
   handleLangs,
-  handleSummary,
   handleStats,
   handleHelp,
   handleDebug,
@@ -49,7 +48,6 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN, {
 bot.command("start", handleStart);
 bot.command("lang", handleLang);
 bot.command("langs", handleLangs);
-bot.command("summary", handleSummary);
 bot.command("stats", handleStats);
 bot.command("help", handleHelp);
 bot.command("debug", handleDebug);
