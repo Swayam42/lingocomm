@@ -19,6 +19,7 @@ import {
   handleViewAllLangsCallback,
   handleBackToWelcomeCallback,
 } from "./handlers/commands.js";
+import { handleAnalyzeVoice, handleVoiceAnalysisCallback } from "./handlers/voiceAnalyzer.js";
 
 // ── Validate required env vars ────────────────────────────────────────
 const required = ["TELEGRAM_BOT_TOKEN", "LINGODOTDEV_API_KEY", "MONGODB_URI"];
@@ -52,6 +53,7 @@ bot.command("summary", handleSummary);
 bot.command("stats", handleStats);
 bot.command("help", handleHelp);
 bot.command("debug", handleDebug);
+bot.command("analyze", handleAnalyzeVoice);
 
 // ── Register callback query handlers ──────────────────────────────────
 bot.action("set_language", handleSetLanguageCallback);
@@ -59,6 +61,7 @@ bot.action(/^lang_/, handleLanguageSelectionCallback);
 bot.action("other_languages", handleOtherLanguagesCallback);
 bot.action("view_all_langs", handleViewAllLangsCallback);
 bot.action("back_to_welcome", handleBackToWelcomeCallback);
+bot.action(/^va_/, handleVoiceAnalysisCallback);
 
 // ── New member joins/leaves ────────────────────────────────────────────
 bot.on(message("new_chat_members"), handleNewMember);
@@ -70,7 +73,7 @@ bot.on(message("text"), handleMessage);
 // ── Photo captions → translate ────────────────────────────────────────
 bot.on(message("photo"), handlePhotoCaption);
 
-// ── Document captions → translate ─────────────────────────────────────
+// ── Document captions → translate ────────────────────────────────────
 bot.on(message("document"), handleDocumentCaption);
 
 // ── Error handling ────────────────────────────────────────────────────

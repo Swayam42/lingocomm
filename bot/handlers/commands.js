@@ -262,6 +262,7 @@ export async function handleHelp(ctx) {
     `/langs - List all supported languages (DM only)\n` +
     `/stats - View your personal stats (groups only)\n` +
     `/summary - Get recent chat in your language (groups only, admin)\n` +
+    `/analyze - Analyze voice message (reply to voice)\n` +
     `/debug - Troubleshooting info (groups only, admin)\n` +
     `/help - Show this message\n\n` +
     `<b>How it works:</b>\n` +
@@ -269,6 +270,13 @@ export async function handleHelp(ctx) {
     `2. Chat naturally in any language\n` +
     `3. Bot replies with translations for all group members\n` +
     `4. Everyone sees translations in the thread\n\n` +
+    `<b>Voice Analysis (Auto-Detect):</b>\n` +
+    `📢 <b>Just send a voice message or MP3 file!</b>\n` +
+    `The bot will automatically:\n` +
+    `• Transcribe speech to text\n` +
+    `• Translate to your language\n` +
+    `• Generate audio in your language\n` +
+    `No commands needed - it just works! 🎙️\n\n` +
     `<b>Example:</b>\n` +
     `• You write: "こんにちは" (Japanese)\n` +
     `• Bot replies: 🇮🇳 Hindi: नमस्ते, 🇪🇸 Spanish: Hola\n\n` +
@@ -324,13 +332,13 @@ export async function handleDebug(ctx) {
 
       try {
         await ctx.telegram.sendMessage(userId, debugMsg, { parse_mode: "HTML" });
-        await ctx.reply("✅ Debug info sent to your DM.");
+        await ctx.reply("Debug info sent to your DM.");
       } catch (err) {
-        await ctx.reply("❌ Cannot send DM. Please start a private chat with me first: @" + ctx.botInfo.username);
+        await ctx.reply("Cannot send DM. Please start a private chat with me first: @" + ctx.botInfo.username);
       }
     } catch (err) {
       console.error("[Lingo.dev] Failed to check admin status:", err.message);
-      await ctx.reply("❌ Error checking permissions.");
+      await ctx.reply("Error checking permissions.");
     }
   } else {
     // Private chat - not allowed for debug
