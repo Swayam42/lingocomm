@@ -13,7 +13,7 @@ const BURST_WINDOW = 5000; // 5 second window
 
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/gi;
-const EMOJI_REGEX = /^[\p{Emoji}\s]+$/u; 
+const EMOJI_REGEX = /^[\p{Emoji}\s]+$/u;
 const CODE_BLOCK_REGEX = /(```[\s\S]*?```|`[^`]+`)/g;
 
 
@@ -90,8 +90,8 @@ async function sendWithRetry(ctx, text, options, retries = 3) {
 export async function handleMessage(ctx) {
   const msg = ctx.message;
   if (!msg || !msg.text) return;
-  if (msg.from.is_bot) return; 
-  if (msg.text.startsWith("/")) return; 
+  if (msg.from.is_bot) return;
+  if (msg.text.startsWith("/")) return;
   if (msg.text.trim().length < MIN_LENGTH) return;
 
 
@@ -99,7 +99,7 @@ export async function handleMessage(ctx) {
     console.log(`[Lingo.dev] Skipping URL-only message`);
     return;
   }
-  
+
   if (isEmojiOnly(msg.text)) {
     console.log(`[Lingo.dev] Skipping emoji-only message`);
     return;
@@ -110,10 +110,10 @@ export async function handleMessage(ctx) {
   const lastMsg = cooldowns.get(senderId) || 0;
   if (now - lastMsg < COOLDOWN_MS) return;
   cooldowns.set(senderId, now);
-  
+
   const burstKey = `${senderId}_${msg.chat.id}`;
   let burstData = messageBurst.get(burstKey) || { count: 0, windowStart: now };
-  
+
   if (now - burstData.windowStart > BURST_WINDOW) {
     // Reset window
     burstData = { count: 1, windowStart: now };
@@ -125,7 +125,7 @@ export async function handleMessage(ctx) {
     }
   }
   messageBurst.set(burstKey, burstData);
-  
+
   // Clean up old burst data periodically
   if (messageBurst.size > 1000) {
     for (const [key, data] of messageBurst.entries()) {
@@ -142,7 +142,7 @@ export async function handleMessage(ctx) {
 
   const { textWithPlaceholders: textWithoutCode, codeBlocks } = extractCodeBlocks(text);
   const hasCodeBlocks = codeBlocks.length > 0;
-  
+
   // Extract URLs to preserve them during translation
   const { textWithPlaceholders, urls } = extractUrls(hasCodeBlocks ? textWithoutCode : text);
   const hasUrls = urls.length > 0;
@@ -233,22 +233,21 @@ export async function handleMessage(ctx) {
     // 2. Fetch all unique preferred languages of users in this group
     const allGroupUsers = await User.find({ groups: groupId });
     const allLocales = new Set(allGroupUsers.map(u => u.locale));
-    
+
     console.log(`[Lingo.dev] Group has ${allLocales.size} unique languages: [${[...allLocales].join(", ")}]`);
 
-    // 3. Remove only the detected source language (translate to ALL other languages including sender's preference)
-    // This allows users to send messages in languages other than their preferred language
+    // 3. Remove only the detected source language (translate to ALL other languages)
     const targetLocales = [...allLocales].filter(
       locale => locale !== detectedSourceLang
     );
 
     // 4. If no target languages remain, do nothing
     if (targetLocales.length === 0) {
-      console.log(`[Lingo.dev] No translation needed (everyone speaks ${detectedSourceLang} or sender's language)`);
+      console.log(`[Lingo.dev] No translation needed (everyone speaks ${detectedSourceLang})`);
       return;
     }
 
-    // 5. Use batchLocalizeText() for efficiency
+    // 5. Translate — use detected language as sourceLocale
     console.log(`[Lingo.dev] Translating from ${detectedSourceLang} to [${targetLocales.join(", ")}]`);
     const textToTranslate = hasCodeBlocks ? textWithPlaceholders : (hasUrls ? textWithPlaceholders : text);
     const translations = await translateToMany(textToTranslate, detectedSourceLang, targetLocales);
@@ -257,16 +256,16 @@ export async function handleMessage(ctx) {
     const translationLines = [];
     for (const locale of targetLocales) {
       let translated = translations[locale];
-      
+
       // Restore URLs if they were extracted
       if (hasUrls && translated) {
         translated = restoreUrls(translated, urls);
       }
-      
+
       if (hasCodeBlocks && translated) {
         translated = restoreCodeBlocks(translated, codeBlocks);
       }
-      
+
       // Post translation if it exists and has content
       if (translated && translated.trim().length > 0) {
         const flag = flagOf(locale);
@@ -283,9 +282,9 @@ export async function handleMessage(ctx) {
       // Clean, minimal format - just the translations
       let replyText = translationLines.join('\n\n');
       replyText = truncateToLimit(replyText);
-      
+
       console.log(`[Lingo.dev] Posting ${translationLines.length} translation(s) to group...`);
-      
+
       try {
         await sendWithRetry(ctx, replyText, {
           parse_mode: "HTML",
@@ -338,22 +337,22 @@ export async function handleMessage(ctx) {
  */
 export async function handlePhotoCaption(ctx) {
   const msg = ctx.message;
-  
+
   // Ignore photos without captions
   if (!msg.caption || msg.caption.trim().length < MIN_LENGTH) {
     console.log(`[Lingo.dev] Skipping photo without caption`);
     return;
   }
-  
+
   // Ignore if caption is URL-only
   if (isUrlOnly(msg.caption)) {
     console.log(`[Lingo.dev] Skipping photo with URL-only caption`);
     return;
   }
-  
+
   if (msg.from.is_bot) return;
   if (msg.caption.startsWith("/")) return;
-  
+
   // Translate caption using the same logic as text messages
   await translateCaption(ctx, msg.caption);
 }
@@ -363,22 +362,22 @@ export async function handlePhotoCaption(ctx) {
  */
 export async function handleDocumentCaption(ctx) {
   const msg = ctx.message;
-  
+
   // Ignore documents without captions
   if (!msg.caption || msg.caption.trim().length < MIN_LENGTH) {
     console.log(`[Lingo.dev] Skipping document without caption`);
     return;
   }
-  
+
   // Ignore if caption is URL-only
   if (isUrlOnly(msg.caption)) {
     console.log(`[Lingo.dev] Skipping document with URL-only caption`);
     return;
   }
-  
+
   if (msg.from.is_bot) return;
   if (msg.caption.startsWith("/")) return;
-  
+
   // Translate caption using the same logic as text messages
   await translateCaption(ctx, msg.caption);
 }
@@ -390,35 +389,34 @@ async function translateCaption(ctx, captionText) {
   const msg = ctx.message;
   const senderId = msg.from.id;
   const now = Date.now();
-  
+
   // Apply cooldown
   const lastMsg = cooldowns.get(senderId) || 0;
   if (now - lastMsg < COOLDOWN_MS) return;
   cooldowns.set(senderId, now);
-  
+
   if (isEmojiOnly(captionText)) {
     console.log(`[Lingo.dev] Skipping emoji-only caption`);
     return;
   }
-  
+
   const groupId = msg.chat.id.toString();
   const groupName = msg.chat.title || "Unknown Group";
   const senderUsername = msg.from.first_name || msg.from.username || "User";
-  
+
   const { textWithPlaceholders: textWithoutCode, codeBlocks } = extractCodeBlocks(captionText);
   const hasCodeBlocks = codeBlocks.length > 0;
-  
+
   // Extract URLs to preserve them
   const { textWithPlaceholders, urls } = extractUrls(hasCodeBlocks ? textWithoutCode : captionText);
   const hasUrls = urls.length > 0;
-  
+
   try {
     // Get or create sender profile
     let sender = await User.findOne({ telegramId: senderId });
     if (!sender) {
-      const textToDetect = hasUrls ? textWithPlaceholders : captionText;
       const telegramLangHint = msg.from.language_code?.split('-')[0] || "en";
-      const detectedLocale = await detectLanguage(textToDetect, telegramLangHint);
+      const detectedLocale = await detectLanguage(captionText, telegramLangHint);
       sender = await User.create({
         telegramId: senderId,
         username: msg.from.username || "",
@@ -434,8 +432,7 @@ async function translateCaption(ctx, captionText) {
       }
       
       if (!sender.manuallySet) {
-        const textToDetect = hasUrls ? textWithPlaceholders : captionText;
-        const detectedLocale = await detectLanguage(textToDetect, sender.locale);
+        const detectedLocale = await detectLanguage(captionText, sender.locale);
         if (detectedLocale !== sender.locale) {
           sender.locale = detectedLocale;
           console.log(`[Lingo.dev] Auto-updated ${senderUsername} language: ${detectedLocale}`);
@@ -452,41 +449,35 @@ async function translateCaption(ctx, captionText) {
     let detectedSourceLang;
     // Always detect caption language properly
     detectedSourceLang = await detectLanguage(textToDetect, sender.locale);
-    
-    console.log(`[Lingo.dev] Caption language: ${detectedSourceLang}${hasUrls ? ' | URLs preserved' : ''}${hasCodeBlocks ? ' | Code preserved' : ''}`);
-    
     // Get target languages
     const allGroupUsers = await User.find({ groups: groupId });
     const allLocales = new Set(allGroupUsers.map(u => u.locale));
-    
-    // Translate to all languages except the detected source
-    const targetLocales = [...allLocales].filter(
-      locale => locale !== detectedSourceLang
-    );
-    
+
+    const targetLocales = [...allLocales].filter(locale => locale !== detectedSourceLang);
+
     if (targetLocales.length === 0) {
       console.log(`[Lingo.dev] No caption translation needed`);
       return;
     }
-    
-    // Translate caption
+
+    // Translate caption — use detected language as source
     console.log(`[Lingo.dev] Translating caption from ${detectedSourceLang} to [${targetLocales.join(", ")}]`);
     const textToTranslate = hasCodeBlocks ? textWithPlaceholders : (hasUrls ? textWithPlaceholders : captionText);
     const translations = await translateToMany(textToTranslate, detectedSourceLang, targetLocales);
-    
+
     // Build minimal professional translations
     const translationLines = [];
     for (const locale of targetLocales) {
       let translated = translations[locale];
-      
+
       if (hasUrls && translated) {
         translated = restoreUrls(translated, urls);
       }
-      
+
       if (hasCodeBlocks && translated) {
         translated = restoreCodeBlocks(translated, codeBlocks);
       }
-      
+
       // Post translation if it exists and has content
       if (translated && translated.trim().length > 0) {
         const flag = flagOf(locale);
@@ -496,14 +487,14 @@ async function translateCaption(ctx, captionText) {
         console.log(`[Lingo.dev] Added ${locale} caption translation`);
       }
     }
-    
+
     if (translationLines.length > 0) {
       // Clean minimal format
       let replyText = translationLines.join('\n\n');
       replyText = truncateToLimit(replyText);
-      
+
       console.log(`[Lingo.dev] Posting ${translationLines.length} caption translation(s)...`);
-      
+
       try {
         await sendWithRetry(ctx, replyText, {
           parse_mode: "HTML",
@@ -516,7 +507,7 @@ async function translateCaption(ctx, captionText) {
     } else {
       console.log(`[Lingo.dev] No caption translations to post`);
     }
-    
+
     // Log for analytics
     await messageLog.create({
       groupId,
@@ -525,7 +516,7 @@ async function translateCaption(ctx, captionText) {
       text: captionText,
       detectedLocale: detectedSourceLang,
     });
-    
+
     await groupStats.findOneAndUpdate(
       { groupId },
       {
@@ -538,7 +529,7 @@ async function translateCaption(ctx, captionText) {
       },
       { upsert: true, new: true }
     );
-    
+
   } catch (err) {
     console.error("[LingoComm] Caption translation error:", err.message);
   }

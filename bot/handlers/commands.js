@@ -87,7 +87,7 @@ export async function handleLang(ctx) {
     return ctx.reply(
       `${flagOf(current)} Your current language: <b>${nameOf(current)}</b>\n\n` +
       `To change: <code>/lang [code]</code>\n` +
-      `Example: <code>/lang ja</code>\n\n` +
+      `Example: <code>/lang ja</code> or <code>/lang hi</code>\n\n` +
       `See all codes: /langs`,
       { parse_mode: "HTML" }
     );
@@ -125,7 +125,6 @@ export async function handleLang(ctx) {
 }
 
 export async function handleLangs(ctx) {
-  // DM-only restriction
   if (ctx.chat.type !== "private") {
     return ctx.reply(
       "Please use /langs in a private message with me.\n\n" +

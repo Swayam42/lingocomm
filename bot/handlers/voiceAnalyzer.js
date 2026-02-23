@@ -9,20 +9,42 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const tempDir = path.join(__dirname, "../../temp");
 
-// Initialize API clients
+// ── Initialize API clients ────────────────────────────────────────────
 let deepgramClient;
 let ttsClient;
 
 try {
   if (process.env.DEEPGRAM_API_KEY) {
     deepgramClient = createClient(process.env.DEEPGRAM_API_KEY);
-  }
-  
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    ttsClient = new googleTextToSpeech.TextToSpeechClient();
+    console.log("[VoiceAnalyzer] Deepgram client initialized");
+  } else {
+    console.warn("[VoiceAnalyzer] DEEPGRAM_API_KEY not set – voice transcription disabled");
   }
 } catch (err) {
-  console.error("[VoiceAnalyzer] API client initialization failed:", err.message);
+  console.error("[VoiceAnalyzer] Deepgram init failed:", err.message);
+}
+
+try {
+  // Priority 1: Base64-encoded JSON (Render / cloud deployments)
+  if (process.env.GOOGLE_CREDENTIALS_BASE64) {
+    const credentialsJson = Buffer.from(
+      process.env.GOOGLE_CREDENTIALS_BASE64,
+      "base64"
+    ).toString("utf8");
+    const credentials = JSON.parse(credentialsJson);
+    ttsClient = new googleTextToSpeech.TextToSpeechClient({ credentials });
+    console.log("[VoiceAnalyzer] Google TTS initialized from GOOGLE_CREDENTIALS_BASE64");
+
+  // Priority 2: File path (local development)
+  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    ttsClient = new googleTextToSpeech.TextToSpeechClient();
+    console.log("[VoiceAnalyzer] Google TTS initialized from GOOGLE_APPLICATION_CREDENTIALS file");
+
+  } else {
+    console.warn("[VoiceAnalyzer] No Google credentials found – TTS disabled. Set GOOGLE_CREDENTIALS_BASE64 on Render.");
+  }
+} catch (err) {
+  console.error("[VoiceAnalyzer] Google TTS init failed:", err.message);
 }
 
 // Module-level cache (better than global)
@@ -139,7 +161,6 @@ async function processVoiceAnalysis(ctx, fileId, fileExtension, messageToReplyTo
   const processingMsg = await ctx.reply("⏳ Analyzing...");
   
   let tempFilePath;
-  let ttsFilePath;
 
   try {
     // 1. Download audio
@@ -151,31 +172,42 @@ async function processVoiceAnalysis(ctx, fileId, fileExtension, messageToReplyTo
     // 3. Translate to user's preferred language
     const translatedText = await translateText(transcript, detectedLang, userLang);
 
-    // 4. Generate TTS in user's preferred language
-    const audioBuffer = await textToSpeech(translatedText, userLang);
-    ttsFilePath = path.join(tempDir, `tts_${userId}_${Date.now()}.mp3`);
-    fs.writeFileSync(ttsFilePath, audioBuffer);
+    // 4. Generate TTS in user's preferred language (optional – skip if TTS unavailable)
+    let ttsFilePath = null;
+    if (ttsClient) {
+      try {
+        const audioBuffer = await textToSpeech(translatedText, userLang);
+        ttsFilePath = path.join(tempDir, `tts_${userId}_${Date.now()}.mp3`);
+        fs.writeFileSync(ttsFilePath, audioBuffer);
+      } catch (ttsErr) {
+        console.warn("[VoiceAnalyzer] TTS generation failed (non-fatal):", ttsErr.message);
+        ttsFilePath = null;
+      }
+    }
 
-    // 5. Send result
+    // 5. Build inline keyboard (hide 🔊 Listen button if TTS failed)
+    const inlineKeyboard = [
+      [
+        { text: "📝 Original", callback_data: `va_transcript_${userId}_${ctx.message.message_id}` },
+        { text: "🌐 Translated", callback_data: `va_translated_${userId}_${ctx.message.message_id}` },
+      ],
+    ];
+    if (ttsFilePath) {
+      inlineKeyboard.push([{ text: "🔊 Listen", callback_data: `va_audio_${userId}_${ctx.message.message_id}` }]);
+    }
+
+    // 6. Send result
     await ctx.telegram.deleteMessage(ctx.chat.id, processingMsg.message_id);
     await ctx.telegram.sendMessage(
       ctx.chat.id,
-      "✅ Audio analyzed!",
+      ttsFilePath ? "✅ Audio analyzed!" : "✅ Audio analyzed! (TTS unavailable)",
       {
         reply_to_message_id: messageToReplyTo,
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "📝 Original", callback_data: `va_transcript_${userId}_${ctx.message.message_id}` },
-              { text: "🌐 Translated", callback_data: `va_translated_${userId}_${ctx.message.message_id}` },
-            ],
-            [{ text: "🔊 Listen", callback_data: `va_audio_${userId}_${ctx.message.message_id}` }],
-          ],
-        },
+        reply_markup: { inline_keyboard: inlineKeyboard },
       }
     );
 
-    // 6. Cache results (1 hour)
+    // 7. Cache results (1 hour)
     analysisCache.set(`${userId}_${ctx.message.message_id}`, {
       transcript,
       translatedText,
@@ -187,13 +219,30 @@ async function processVoiceAnalysis(ctx, fileId, fileExtension, messageToReplyTo
     });
 
   } catch (err) {
-    console.error("[VoiceAnalyzer]", err.message);
-    await ctx.telegram.editMessageText(
-      ctx.chat.id,
-      processingMsg.message_id,
-      null,
-      "❌ Could not analyze audio. Try a clearer voice message."
-    );
+    console.error("[VoiceAnalyzer] Error:", err.message);
+
+    // Give a specific error message so it's easier to diagnose
+    let userMsg = "❌ Analysis failed. Please try again.";
+    if (err.message === "Voice analysis unavailable") {
+      userMsg = "❌ Voice transcription is not configured (DEEPGRAM_API_KEY missing).";
+    } else if (err.message === "TTS unavailable") {
+      userMsg = "❌ Text-to-speech is not configured (Google credentials missing). Transcription may still work – tap 📝 Original or 🌐 Translated.";
+    } else if (err.message === "No speech detected") {
+      userMsg = "❌ No speech detected in the audio. Please send a clearer voice message.";
+    } else if (err.message === "Transcription failed") {
+      userMsg = "❌ Could not transcribe audio. Try a clearer voice message.";
+    }
+
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        processingMsg.message_id,
+        null,
+        userMsg
+      );
+    } catch (_) {
+      await ctx.reply(userMsg);
+    }
   } finally {
     // Clean up downloaded file
     if (tempFilePath && fs.existsSync(tempFilePath)) {
