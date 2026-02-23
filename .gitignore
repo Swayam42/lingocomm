@@ -1,4 +1,7 @@
 node_modules
 .env
 misc
-temp
+temp/*.mp3
+temp/*.oga
+temp/*.ogg
+*.log

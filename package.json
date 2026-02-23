@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "description": "Multilingual Telegram community bot powered by Lingo.dev",
   "type": "module",
-  "main": "bot/index.js",
+  "main": "start.js",
   "scripts": {
     "start": "node start.js",
-    "dev": "node --watch bot/index.js",
-    "server": "node server/index.js",
-    "dev:server": "node --watch server/index.js"
+    "dev": "node --watch start.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@deepgram/sdk": "^4.11.3",
