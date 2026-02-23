@@ -17,9 +17,21 @@ async function isGroupAdmin(ctx) {
   }
 }
 
+function scheduleAutoDelete(ctx, messageId, delayMs = 5000) {
+  setTimeout(async () => {
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+    } catch {
+      // Ignore delete failures (no permissions / already deleted)
+    }
+  }, delayMs);
+}
+
 export async function handleStart(ctx) {
   const userId = ctx.from.id;
   const username = ctx.from.username || ctx.from.first_name || "there";
+  const isGroup = ctx.chat.type !== "private";
+  const groupId = isGroup ? ctx.chat.id.toString() : null;
 
   let user = await User.findOne({ telegramId: userId });
   if (!user) {
@@ -29,10 +41,21 @@ export async function handleStart(ctx) {
       firstName: ctx.from.first_name || "",
       locale: "en",
       manuallySet: false,
+      groups: groupId ? [groupId] : [],
     });
+  } else if (groupId) {
+    await User.findOneAndUpdate(
+      { telegramId: userId },
+      {
+        $addToSet: { groups: groupId },
+        $set: {
+          username: ctx.from.username || user.username,
+          firstName: ctx.from.first_name || user.firstName,
+        },
+      },
+      { new: true }
+    );
   }
-
-  const isGroup = ctx.chat.type !== "private";
 
   if (isGroup) {
     await ctx.reply(
@@ -69,17 +92,82 @@ export async function handleStart(ctx) {
 }
 
 export async function handleLang(ctx) {
-  if (ctx.chat.type !== "private") {
-    return ctx.reply(
-      "Please use /lang in a private message with me.\n\n" +
-      `Open a DM: @${ctx.botInfo.username}`,
-      { parse_mode: "HTML" }
-    );
-  }
-
   const userId = ctx.from.id;
+  const isGroup = ctx.chat.type !== "private";
+  const groupId = isGroup ? ctx.chat.id.toString() : null;
   const args = ctx.message.text.split(" ").slice(1);
   const requestedLang = args[0]?.toLowerCase().trim();
+
+  if (isGroup) {
+    // Group quick-register flow: keeps bot scalable across many groups.
+    if (!requestedLang) {
+      let user = await User.findOne({ telegramId: userId });
+      if (!user) {
+        user = await User.create({
+          telegramId: userId,
+          username: ctx.from.username || "",
+          firstName: ctx.from.first_name || "",
+          locale: "en",
+          manuallySet: false,
+          groups: [groupId],
+        });
+      } else {
+        await User.findOneAndUpdate(
+          { telegramId: userId },
+          {
+            $addToSet: { groups: groupId },
+            $set: {
+              username: ctx.from.username || user.username,
+              firstName: ctx.from.first_name || user.firstName,
+            },
+          },
+          { new: true }
+        );
+      }
+
+      const info = await ctx.reply(
+        `${flagOf(user.locale)} Registered in this group with <b>${nameOf(user.locale)}</b>.\n` +
+        `Use <code>/lang [code]</code> here for quick switch, or DM @${ctx.botInfo.username} for full setup.`,
+        { parse_mode: "HTML" }
+      );
+      scheduleAutoDelete(ctx, ctx.message.message_id);
+      scheduleAutoDelete(ctx, info.message_id);
+      return;
+    }
+
+    if (!LANG_NAMES[requestedLang]) {
+      const invalid = await ctx.reply(
+        `"${requestedLang}" is not supported. Use DM @${ctx.botInfo.username} + /langs to see codes.`,
+        { parse_mode: "HTML" }
+      );
+      scheduleAutoDelete(ctx, ctx.message.message_id);
+      scheduleAutoDelete(ctx, invalid.message_id);
+      return;
+    }
+
+    await User.findOneAndUpdate(
+      { telegramId: userId },
+      {
+        $addToSet: { groups: groupId },
+        $set: {
+          locale: requestedLang,
+          manuallySet: true,
+          username: ctx.from.username || "",
+          firstName: ctx.from.first_name || "",
+        },
+      },
+      { upsert: true, new: true }
+    );
+
+    const quick = await ctx.reply(
+      `${flagOf(requestedLang)} Language set to <b>${nameOf(requestedLang)}</b> for this group.\n` +
+      `This message auto-deletes in 5s.`,
+      { parse_mode: "HTML" }
+    );
+    scheduleAutoDelete(ctx, ctx.message.message_id);
+    scheduleAutoDelete(ctx, quick.message_id);
+    return;
+  }
 
   if (!requestedLang) {
     const user = await User.findOne({ telegramId: userId });
@@ -191,14 +279,15 @@ export async function handleHelp(ctx) {
     `<b>LingoComm - Real-Time Translation</b>\n\n` +
     `<b>Commands:</b>\n` +
     `/start - Welcome and setup guide\n` +
-    `/lang [code] - Set your language (DM only)\n` +
+    `/lang [code] - Set/register language (DM + quick group mode)\n` +
     `/langs - List all supported languages (DM only)\n` +
     `/stats - View your personal stats (groups only)\n` +
     `/analyze - Analyze voice message (reply to voice)\n` +
     `/debug - Troubleshooting info (groups only, admin)\n` +
     `/help - Show this message\n\n` +
     `<b>How it works:</b>\n` +
-    `1. Set your language with /lang in DM\n` +
+    `1. Set your language with /lang in DM (recommended)\n` +
+    `   or use /lang [code] in group for quick registration\n` +
     `2. Chat naturally in any language\n` +
     `3. Bot replies with translations for all group members\n` +
     `4. Everyone sees translations in the thread\n\n` +
