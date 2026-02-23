@@ -15,13 +15,8 @@
 
 **LingoComm** fixes this by translating every group message into each member's preferred language in real time, across **25+ languages**.
 
-```
-@rahul (🇮🇳) :  मुझे बग मिला
-
-LingoComm  →  🇬🇧 English: I found a bug
-               🇯🇵 Japanese: バグを見つけました`
-               🇧🇷 Portuguese (Brazil): Encontrei um bug
-```
+[![LingoComm — Real-time multilingual Telegram bot](/public/landing.png)]
+▶ <a href="https://www.youtube.com/watch?v=0qNdpkW9WAY" target="_blank">Click to watch the demo</a>
 
 **Core innovation:** Lingo.dev's `batchLocalizeText()` — **1 API call** translates into all target languages simultaneously (10× faster than sequential translation loops).
 
