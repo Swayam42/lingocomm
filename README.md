@@ -5,7 +5,7 @@
 ### Real-time multilingual translation bot for Telegram communities
 
 [![Hackathon](https://img.shields.io/badge/Lingo.dev-Multilingual%20Hackathon-7c3aed?style=for-the-badge)](https://lingo.dev)
-[![Bot](https://img.shields.io/badge/Telegram-@autoTranslateCommBot-2CA5E0?style=for-the-badge&logo=telegram)](https://t.me/autoTranslateCommBot)
+[![Bot](https://img.shields.io/badge/Telegram-@lingocomm_bot-2CA5E0?style=for-the-badge&logo=telegram)](https://t.me/lingocomm_bot)
 [![Deploy](https://img.shields.io/badge/Hosted%20on-Render-46E3B7?style=for-the-badge&logo=render)](https://lingocomm-bot.onrender.com)
 
 ---
@@ -380,7 +380,7 @@ const translations = await lingo.batchLocalizeText(text, {
 
 **Built for the [Lingo.dev Multilingual Hackathon](https://lingo.dev) · February 2026**
 
-[![Try Bot](https://img.shields.io/badge/Try-@autoTranslateCommBot-2CA5E0?style=for-the-badge&logo=telegram)](https://t.me/autoTranslateCommBot)
+[![Try Bot](https://img.shields.io/badge/Try-@lingocomm_bot-2CA5E0?style=for-the-badge&logo=telegram)](https://t.me/lingocomm_bot)
 [![Render](https://img.shields.io/badge/Live-lingocomm--bot.onrender.com-46E3B7?style=for-the-badge&logo=render)](https://lingocomm-bot.onrender.com)
 [![GitHub](https://img.shields.io/badge/Source-GitHub-black?style=for-the-badge&logo=github)](https://github.com/Swayam42/lingocomm)
 
